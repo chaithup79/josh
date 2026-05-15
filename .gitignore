@@ -107,3 +107,12 @@ credentials.json
 *.key
 .credentials
 data/mysql/ib_logfile0
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
