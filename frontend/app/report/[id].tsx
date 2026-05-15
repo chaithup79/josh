@@ -16,6 +16,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { ArrowLeft, CaretRight, MapPin, ThumbsUp } from "phosphor-react-native";
 import { api, auth, Pothole, StatusUpdate, User } from "../../src/api";
+import { useLiveUpdates } from "../../src/useLiveUpdates";
 import { radius, spacing, STATUS_COLORS, STATUS_LABELS, SEVERITY_COLORS, useTheme } from "../../src/theme";
 
 export default function ReportDetails() {
@@ -50,6 +51,18 @@ export default function ReportDetails() {
   }, [id]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Live updates for this specific pothole
+  useLiveUpdates(
+    useCallback((e) => {
+      if (
+        (e.type === "status_updated" || e.type === "upvoted") &&
+        e.pothole_id === id
+      ) {
+        load();
+      }
+    }, [load, id])
+  );
 
   const upvote = async () => {
     if (!pothole || voting) return;

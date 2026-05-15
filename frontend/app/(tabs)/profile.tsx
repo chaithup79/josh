@@ -15,6 +15,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { ChartBar, CheckCircle, Clock, SignOut, User as UserIcon, Wrench } from "phosphor-react-native";
 import { api, auth, User } from "../../src/api";
+import { useLiveUpdates } from "../../src/useLiveUpdates";
 import { radius, spacing, STATUS_COLORS, STATUS_LABELS, useTheme } from "../../src/theme";
 
 export default function Profile() {
@@ -37,6 +38,14 @@ export default function Profile() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  useLiveUpdates(
+    useCallback((e) => {
+      if (e.type === "pothole_created" || e.type === "status_updated") {
+        load();
+      }
+    }, [load])
+  );
 
   const signOut = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);

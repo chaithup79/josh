@@ -1,0 +1,39 @@
+{
+  "summary": "Backend-only testing for NammaRoad iteration 3. Added 9 new pytest cases (5 BBMP invite-code, 4 WebSocket broadcast) to /app/backend/tests/test_nammaroad_backend.py and updated 2 existing login tests to send the invite code. Ran full suite: 30/30 PASS in ~3.6s. Invite-code gating works (admin/engineer 403 without/wrong code, 200 with BBMP-2026, citizens unaffected). WebSocket /api/ws accepts connections, emits initial hello, and broadcasts pothole_created / status_updated / upvoted events with the correct payload shape.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_nammaroad_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Frontend (Expo) is still served via ngrok tunnel and tunnel reports ERR_NGROK_334 ('endpoint already online'). Web preview at https://road-report-live.preview.emergentagent.com (Kubernetes ingress) may still front HTTP but pure-WS upgrades through it were not validated here; tests use ws://localhost:8001/api/ws as instructed. Main agent should confirm Kubernetes ingress proxies wss:// for the frontend useLiveUpdates hook in production preview.",
+    "Frontend UI checks for invite-code field visibility and LIVE indicator were NOT performed (testing_type=backend only and tunnel is currently failing). Main agent can self-verify via the Expo Go app or by running browser preview after tunnel recovers."
+  ],
+  "critical_code_review_comments": [
+    "server.py login: invite_code is trimmed but case-sensitive — fine, matches spec ('BBMP-2026').",
+    "WSManager uses asyncio.Lock + Set[WebSocket] with dead-socket cleanup — solid; broadcasts run sequentially (await per socket) which is OK for current scale.",
+    "/api/ws is registered on `app` directly (not under api_router). This is intentional because APIRouter.websocket has prefix quirks; current path /api/ws is correct.",
+    "All previous review items (env-driven URLs, _id exclusion, async I/O, testID usage) remain satisfied."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_nammaroad_backend.py"
+  ],
+  "success_rate": {
+    "backend": "100% (30/30)",
+    "frontend": "not tested (backend-only iteration)"
+  },
+  "seed_data_creation": "Reused /api/seed (8 sample potholes, 3 demo users: bbmp-admin-token, engineer-token, citizen-token). Test users created with TEST_ prefix and dummy 9999*** phone numbers.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use ws://localhost:8001/api/ws for websocket tests (Kubernetes ingress wss not verified end-to-end). Invite code is BBMP-2026 (from /app/backend/.env). To re-run: `pytest /app/backend/tests/test_nammaroad_backend.py -v`. websockets==16.0 is already installed. Frontend ngrok tunnel was throwing ERR_NGROK_334 throughout this run; if frontend UI testing is requested next, the tunnel needs to be restarted.",
+  "rca_of_issue": "N/A — no failures."
+}

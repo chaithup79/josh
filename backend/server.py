@@ -1,13 +1,15 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Header, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import json
+import asyncio
 import logging
 import secrets
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Set
 import uuid
 from datetime import datetime, timezone
 
@@ -33,6 +35,7 @@ class LoginRequest(BaseModel):
     name: str
     phone: str
     role: str = "citizen"  # citizen | engineer | admin
+    invite_code: Optional[str] = None  # required for admin/engineer
 
 class User(BaseModel):
     id: str
@@ -83,6 +86,11 @@ def clean(doc: dict) -> dict:
 @api_router.post("/auth/login")
 async def login(payload: LoginRequest):
     role = payload.role if payload.role in ("citizen", "engineer", "admin") else "citizen"
+    # Staff roles require valid BBMP invite code
+    if role in ("admin", "engineer"):
+        expected = os.environ.get("BBMP_INVITE_CODE", "")
+        if not payload.invite_code or payload.invite_code.strip() != expected:
+            raise HTTPException(status_code=403, detail="Invalid BBMP invite code")
     existing = await db.users.find_one({"phone": payload.phone}, {"_id": 0})
     if existing:
         # Update name/role if changed
@@ -161,6 +169,14 @@ async def create_pothole(payload: PotholeCreate, authorization: Optional[str] = 
         "timestamp": now_iso(),
     })
 
+    await ws_manager.broadcast({
+        "type": "pothole_created",
+        "pothole_id": pid,
+        "zone": doc["zone"],
+        "status": "reported",
+        "severity": doc["severity"],
+    })
+
     return clean(doc)
 
 @api_router.get("/potholes")
@@ -230,6 +246,13 @@ async def update_status(pid: str, payload: StatusUpdateRequest, authorization: O
     })
 
     updated = await db.potholes.find_one({"id": pid}, {"_id": 0})
+    await ws_manager.broadcast({
+        "type": "status_updated",
+        "pothole_id": pid,
+        "old_status": old_status,
+        "new_status": payload.new_status,
+        "updated_by": user["name"],
+    })
     return clean(updated)
 
 @api_router.get("/potholes/{pid}/status-history")
@@ -250,6 +273,11 @@ async def upvote(pid: str, authorization: Optional[str] = Header(None)):
         {"$inc": {"upvotes": 1}, "$push": {"upvoted_by": user["id"]}}
     )
     updated = await db.potholes.find_one({"id": pid}, {"_id": 0})
+    await ws_manager.broadcast({
+        "type": "upvoted",
+        "pothole_id": pid,
+        "upvotes": updated.get("upvotes", 1),
+    })
     return {"upvotes": updated.get("upvotes", 1), "already": False}
 
 # ===================== ANALYTICS =====================
@@ -393,3 +421,48 @@ logger = logging.getLogger(__name__)
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+# ===================== WEBSOCKETS =====================
+
+class WSManager:
+    def __init__(self):
+        self.active: Set[WebSocket] = set()
+        self.lock = asyncio.Lock()
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        async with self.lock:
+            self.active.add(ws)
+
+    async def disconnect(self, ws: WebSocket):
+        async with self.lock:
+            self.active.discard(ws)
+
+    async def broadcast(self, event: dict):
+        msg = json.dumps(event, default=str)
+        dead = []
+        async with self.lock:
+            conns = list(self.active)
+        for ws in conns:
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                dead.append(ws)
+        if dead:
+            async with self.lock:
+                for ws in dead:
+                    self.active.discard(ws)
+
+ws_manager = WSManager()
+
+@app.websocket("/api/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws_manager.connect(ws)
+    try:
+        await ws.send_text(json.dumps({"type": "hello", "message": "connected"}))
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(ws)
+    except Exception:
+        await ws_manager.disconnect(ws)

@@ -15,6 +15,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { ListBullets, Plus } from "phosphor-react-native";
 import { api, auth, Pothole, User } from "../../src/api";
+import { useLiveUpdates } from "../../src/useLiveUpdates";
 import { radius, spacing, STATUS_COLORS, STATUS_LABELS, useTheme } from "../../src/theme";
 
 export default function MyReports() {
@@ -41,6 +42,14 @@ export default function MyReports() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  useLiveUpdates(
+    useCallback((e) => {
+      if (e.type === "pothole_created" || e.type === "status_updated" || e.type === "upvoted") {
+        load();
+      }
+    }, [load])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);

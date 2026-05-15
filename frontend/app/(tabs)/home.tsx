@@ -15,6 +15,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { MapPin, Plus, Warning } from "phosphor-react-native";
 import { api, Pothole } from "../../src/api";
+import { useLiveUpdates } from "../../src/useLiveUpdates";
 import {
   radius,
   spacing,
@@ -61,6 +62,18 @@ export default function Home() {
     useCallback(() => {
       load();
     }, [load])
+  );
+
+  // Live updates via WebSocket — auto-reload on any pothole event
+  const { connected } = useLiveUpdates(
+    useCallback(
+      (e) => {
+        if (e.type === "pothole_created" || e.type === "status_updated" || e.type === "upvoted") {
+          load();
+        }
+      },
+      [load]
+    )
   );
 
   const statusColors = useMemo(() => STATUS_COLORS(t), [t]);
@@ -336,6 +349,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
   },
+  liveDot: { width: 8, height: 8, borderRadius: 4 },
   mapBox: {
     height: 360,
     borderRadius: radius.lg,

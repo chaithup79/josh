@@ -68,10 +68,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  login: (name: string, phone: string, role: string) =>
+  login: (name: string, phone: string, role: string, invite_code?: string) =>
     request<User>("/auth/login", {
       method: "POST",
-      body: JSON.stringify({ name, phone, role }),
+      body: JSON.stringify({ name, phone, role, invite_code }),
     }),
   me: () => request<User>("/auth/me"),
   listPotholes: (params?: { status?: string; zone?: string; mine?: boolean }) => {

@@ -1,10 +1,16 @@
 """NammaRoad backend integration tests"""
 import os
+import json
+import asyncio
 import pytest
 import requests
+import websockets
 
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://road-report-live.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
+# WebSocket endpoint - use local backend (Kubernetes ingress may not proxy websockets reliably)
+WS_URL = "ws://localhost:8001/api/ws"
+INVITE_CODE = "BBMP-2026"
 
 
 @pytest.fixture(scope="module")
@@ -30,12 +36,12 @@ class TestAuth:
         assert d["role"] == "citizen" and d.get("token")
 
     def test_login_engineer(self, session):
-        r = session.post(f"{API}/auth/login", json={"name": "TEST_EngA", "phone": "9999900002", "role": "engineer"})
+        r = session.post(f"{API}/auth/login", json={"name": "TEST_EngA", "phone": "9999900002", "role": "engineer", "invite_code": INVITE_CODE})
         assert r.status_code == 200
         assert r.json()["role"] == "engineer"
 
     def test_login_admin(self, session):
-        r = session.post(f"{API}/auth/login", json={"name": "TEST_AdminA", "phone": "9999900003", "role": "admin"})
+        r = session.post(f"{API}/auth/login", json={"name": "TEST_AdminA", "phone": "9999900003", "role": "admin", "invite_code": INVITE_CODE})
         assert r.status_code == 200
         assert r.json()["role"] == "admin"
 
@@ -199,3 +205,171 @@ class TestAnalytics:
         assert d["total"] >= 8
         assert isinstance(d["zone_stats"], list) and len(d["zone_stats"]) == 8
         assert set(d["by_status"].keys()) == {"reported", "verified", "assigned", "work_started", "fixed"}
+
+
+# ---------- INVITE CODE (BBMP-2026) ----------
+class TestInviteCode:
+    """Admin/engineer must supply a valid BBMP invite code; citizens unaffected."""
+
+    def test_admin_login_without_code_forbidden(self, session):
+        r = session.post(f"{API}/auth/login", json={
+            "name": "TEST_AdminNoCode", "phone": "9999911101", "role": "admin"
+        })
+        assert r.status_code == 403, r.text
+        assert "invite" in r.text.lower()
+
+    def test_engineer_login_with_wrong_code_forbidden(self, session):
+        r = session.post(f"{API}/auth/login", json={
+            "name": "TEST_EngWrong", "phone": "9999911102",
+            "role": "engineer", "invite_code": "WRONG"
+        })
+        assert r.status_code == 403, r.text
+
+    def test_admin_login_with_correct_code_succeeds(self, session):
+        r = session.post(f"{API}/auth/login", json={
+            "name": "TEST_AdminOK", "phone": "9999911103",
+            "role": "admin", "invite_code": INVITE_CODE
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["role"] == "admin"
+        assert d.get("token")
+        # verify token works
+        me = session.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {d['token']}"})
+        assert me.status_code == 200
+        assert me.json()["phone"] == "9999911103"
+
+    def test_citizen_login_without_code_still_works(self, session):
+        r = session.post(f"{API}/auth/login", json={
+            "name": "TEST_CitizenNoCode", "phone": "9999911104", "role": "citizen"
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["role"] == "citizen"
+
+    def test_engineer_login_with_correct_code_succeeds(self, session):
+        r = session.post(f"{API}/auth/login", json={
+            "name": "TEST_EngOK", "phone": "9999911105",
+            "role": "engineer", "invite_code": INVITE_CODE
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["role"] == "engineer"
+
+
+# ---------- WEBSOCKETS ----------
+async def _recv_until(ws, predicate, timeout=5.0):
+    """Receive messages until predicate(msg_dict) is True or timeout."""
+    end = asyncio.get_event_loop().time() + timeout
+    while True:
+        remaining = end - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("predicate not matched in time")
+        raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if predicate(msg):
+            return msg
+
+
+class TestWebSocket:
+    """WebSocket /api/ws connection + broadcast on pothole events."""
+
+    def test_ws_hello_on_connect(self, seeded):
+        async def run():
+            async with websockets.connect(WS_URL, open_timeout=5) as ws:
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                msg = json.loads(raw)
+                assert msg.get("type") == "hello"
+                assert msg.get("message") == "connected"
+        asyncio.run(run())
+
+    def test_ws_broadcast_pothole_created(self, seeded, session):
+        async def run():
+            async with websockets.connect(WS_URL, open_timeout=5) as ws:
+                # consume hello
+                await asyncio.wait_for(ws.recv(), timeout=5)
+                # trigger create via HTTP in a thread to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                body = {
+                    "photo_base64": "data:image/png;base64,AAA",
+                    "latitude": 12.61, "longitude": 77.61,
+                    "zone": "West Zone", "severity": "high",
+                    "road_name": "TEST_WS_Road",
+                }
+                fut = loop.run_in_executor(
+                    None,
+                    lambda: session.post(f"{API}/potholes", json=body,
+                                         headers={"Authorization": "Bearer citizen-token"})
+                )
+                msg = await _recv_until(ws, lambda m: m.get("type") == "pothole_created", timeout=10)
+                resp = await fut
+                assert resp.status_code == 200
+                created_id = resp.json()["id"]
+                assert msg["pothole_id"] == created_id
+                assert msg["zone"] == "West Zone"
+                assert msg["status"] == "reported"
+                assert msg["severity"] == "high"
+                pytest.ws_created_id = created_id
+        asyncio.run(run())
+
+    def test_ws_broadcast_status_updated(self, seeded, session):
+        # ensure we have a target pothole id
+        pid = getattr(pytest, "ws_created_id", None)
+        if not pid:
+            plist = session.get(f"{API}/potholes", params={"status": "reported"}).json()
+            pid = plist[0]["id"]
+
+        async def run():
+            async with websockets.connect(WS_URL, open_timeout=5) as ws:
+                await asyncio.wait_for(ws.recv(), timeout=5)  # hello
+                loop = asyncio.get_event_loop()
+                fut = loop.run_in_executor(
+                    None,
+                    lambda: session.patch(
+                        f"{API}/potholes/{pid}/status",
+                        json={"new_status": "verified", "comment": "TEST_WS_verify"},
+                        headers={"Authorization": "Bearer bbmp-admin-token"},
+                    ),
+                )
+                msg = await _recv_until(ws, lambda m: m.get("type") == "status_updated"
+                                       and m.get("pothole_id") == pid, timeout=10)
+                resp = await fut
+                assert resp.status_code == 200
+                assert msg["new_status"] == "verified"
+                assert msg["old_status"] in ("reported", "verified", "assigned", "work_started", "fixed")
+                assert msg.get("updated_by")
+        asyncio.run(run())
+
+    def test_ws_broadcast_upvoted(self, seeded, session):
+        # create a fresh citizen who has not upvoted anything
+        login = session.post(f"{API}/auth/login", json={
+            "name": "TEST_WS_Upvoter", "phone": "9999922201", "role": "citizen"
+        }).json()
+        token = login["token"]
+
+        # pick a pothole this user hasn't upvoted
+        plist = session.get(f"{API}/potholes").json()
+        pid = plist[0]["id"]
+
+        async def run():
+            async with websockets.connect(WS_URL, open_timeout=5) as ws:
+                await asyncio.wait_for(ws.recv(), timeout=5)  # hello
+                loop = asyncio.get_event_loop()
+                fut = loop.run_in_executor(
+                    None,
+                    lambda: session.post(
+                        f"{API}/potholes/{pid}/upvote",
+                        headers={"Authorization": f"Bearer {token}"},
+                    ),
+                )
+                resp = await fut
+                assert resp.status_code == 200
+                if resp.json().get("already"):
+                    pytest.skip("user already upvoted this pothole - no broadcast expected")
+                msg = await _recv_until(ws, lambda m: m.get("type") == "upvoted"
+                                       and m.get("pothole_id") == pid, timeout=10)
+                assert isinstance(msg["upvotes"], int)
+                assert msg["upvotes"] >= 1
+        asyncio.run(run())
+

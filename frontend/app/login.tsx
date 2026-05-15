@@ -30,6 +30,7 @@ export default function Login() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState<"citizen" | "engineer" | "admin">("citizen");
+  const [inviteCode, setInviteCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -38,15 +39,20 @@ export default function Login() {
       setErr("Please enter your name and phone");
       return;
     }
+    if ((role === "admin" || role === "engineer") && !inviteCode.trim()) {
+      setErr("BBMP invite code is required for staff access");
+      return;
+    }
     setErr("");
     setLoading(true);
     try {
-      const user = await api.login(name.trim(), phone.trim(), role);
+      const user = await api.login(name.trim(), phone.trim(), role, inviteCode.trim() || undefined);
       await auth.saveSession(user);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace("/(tabs)/home");
     } catch (e: any) {
-      setErr(e?.message || "Login failed");
+      const msg = String(e?.message || "Login failed");
+      setErr(msg.includes("403") ? "Invalid BBMP invite code" : msg);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setLoading(false);
@@ -55,15 +61,17 @@ export default function Login() {
 
   const quickLogin = async (r: "citizen" | "engineer" | "admin") => {
     const presets = {
-      citizen: { name: "Priya Sharma", phone: "9000000003" },
-      engineer: { name: "Suresh Kumar", phone: "9000000002" },
-      admin: { name: "BBMP Admin", phone: "9000000001" },
+      citizen: { name: "Priya Sharma", phone: "9000000003", code: "" },
+      engineer: { name: "Suresh Kumar", phone: "9000000002", code: "BBMP-2026" },
+      admin: { name: "BBMP Admin", phone: "9000000001", code: "BBMP-2026" },
     };
     setLoading(true);
     try {
-      const u = await api.login(presets[r].name, presets[r].phone, r);
+      const u = await api.login(presets[r].name, presets[r].phone, r, presets[r].code);
       await auth.saveSession(u);
       router.replace("/(tabs)/home");
+    } catch (e: any) {
+      setErr(e?.message || "Login failed");
     } finally {
       setLoading(false);
     }
@@ -163,6 +171,29 @@ export default function Login() {
               );
             })}
           </View>
+
+          {(role === "admin" || role === "engineer") && (
+            <>
+              <Text style={[styles.label, { color: t.onSurface, marginTop: spacing.md }]}>
+                BBMP invite code
+              </Text>
+              <TextInput
+                testID="invite-code-input"
+                value={inviteCode}
+                onChangeText={setInviteCode}
+                placeholder="e.g. BBMP-2026"
+                placeholderTextColor={t.onSurfaceSecondary}
+                autoCapitalize="characters"
+                style={[
+                  styles.input,
+                  { color: t.onSurface, backgroundColor: t.brandTertiary, borderColor: t.brandPrimary, borderWidth: 1.5 },
+                ]}
+              />
+              <Text style={{ color: t.onSurfaceSecondary, fontSize: 11, marginTop: 6 }}>
+                Required for BBMP staff. Contact your ward officer if you don&apos;t have one.
+              </Text>
+            </>
+          )}
 
           {err ? <Text style={[styles.err, { color: t.error }]}>{err}</Text> : null}
 
