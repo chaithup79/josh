@@ -106,3 +106,4 @@ credentials.json
 *.pem
 *.key
 .credentials
+data/mysql/ib_logfile0

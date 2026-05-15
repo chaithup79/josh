@@ -59,24 +59,6 @@ export default function Login() {
     }
   };
 
-  const quickLogin = async (r: "citizen" | "engineer" | "admin") => {
-    const presets = {
-      citizen: { name: "Priya Sharma", phone: "9000000003", code: "" },
-      engineer: { name: "Suresh Kumar", phone: "9000000002", code: "BBMP-2026" },
-      admin: { name: "BBMP Admin", phone: "9000000001", code: "BBMP-2026" },
-    };
-    setLoading(true);
-    try {
-      const u = await api.login(presets[r].name, presets[r].phone, r, presets[r].code);
-      await auth.saveSession(u);
-      router.replace("/(tabs)/home");
-    } catch (e: any) {
-      setErr(e?.message || "Login failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <View style={{ flex: 1, backgroundColor: t.surface }} testID="login-screen">
       <LinearGradient
@@ -210,25 +192,9 @@ export default function Login() {
             )}
           </Pressable>
 
-          <Text style={{ color: t.onSurfaceSecondary, fontSize: 12, marginTop: spacing.lg, textAlign: "center" }}>
-            Or try a demo account:
+          <Text style={{ color: t.onSurfaceSecondary, fontSize: 11, marginTop: spacing.lg, textAlign: "center" }}>
+            New users: just enter your details to create an account. BBMP staff need an invite code from your ward officer.
           </Text>
-          <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
-            <Pressable
-              testID="demo-citizen"
-              onPress={() => quickLogin("citizen")}
-              style={[styles.demoBtn, { borderColor: t.border, backgroundColor: t.brandTertiary }]}
-            >
-              <Text style={{ color: t.onBrandTertiary, fontWeight: "600", fontSize: 12 }}>Citizen Demo</Text>
-            </Pressable>
-            <Pressable
-              testID="demo-admin"
-              onPress={() => quickLogin("admin")}
-              style={[styles.demoBtn, { borderColor: t.border, backgroundColor: t.surfaceSecondary }]}
-            >
-              <Text style={{ color: t.onSurface, fontWeight: "600", fontSize: 12 }}>BBMP Admin</Text>
-            </Pressable>
-          </View>
         </View>
       </KeyboardAvoidingView>
     </View>

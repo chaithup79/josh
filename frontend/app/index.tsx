@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { auth, api } from "../src/api";
+import { api, auth } from "../src/api";
 import { useTheme } from "../src/theme";
 
 export default function Index() {
@@ -12,15 +12,6 @@ export default function Index() {
 
   useEffect(() => {
     (async () => {
-      // Best-effort seed (idempotent on first run only — for empty DBs)
-      try {
-        const stats = await api.analytics();
-        if (!stats.total) await api.seed();
-      } catch {
-        try {
-          await api.seed();
-        } catch {}
-      }
       const user = await auth.getUser();
       setTimeout(() => {
         if (user) router.replace("/(tabs)/home");
